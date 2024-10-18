@@ -39,7 +39,9 @@ struct background_task {
 };
 
 struct background_task backTasks[MAX_JOBS];
+
 int job_index = 0;
+sig_atomic_t background_task_completed = 0;
 
 int getCommandIndex(char *cmd) {
     if (strcmp(cmd, "ls")    == 0)  return CMD_LS;
@@ -115,6 +117,33 @@ bool isBackgroundTask(char *args[100]) {
 
 }
 
+void handle_child_termination(int signum) {
+    pid_t pid;
+    int status;
+
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        // Find the index of the completed task in the backTasks array
+        int i;
+        for (i = 0; i < job_index; i++) {
+            if (backTasks[i].pid == pid) {
+                break;
+            }
+        }
+        if (i < job_index) {
+            // Update the status and alert the user
+            strcpy(backTasks[i].status, "Completed");
+            printf("Completed: [%d] %d %s %s\n", i + 1, backTasks[i].pid, backTasks[i].status, backTasks[i].command);
+            printf("[QUASH]$ ");
+            fflush(stdout);
+
+            // Shift remaining tasks up by one index
+            for (int j = i; j < job_index - 1; j++) {
+                backTasks[j] = backTasks[j + 1];
+            }
+            job_index--;  // Decrement the job index
+        }
+    }
+}
 void remove_back_process(pid_t pid){
     //Function that removes background processes
     for (int i = 0; i < job_index; ++i){
@@ -257,37 +286,46 @@ void parseThrough(char input[1024], char *args[100]){
         }
     }
     // Handle background Task(&)
-    if (hasBackgroundTask){
-        int j = 0;
-        while (args[j] != NULL) {
-            //check if the background task symbol exists in string
-            if (strcmp(args[j], "&") == 0) {
-                args[j] = NULL; // Remove & from agrgs s otaht it doesn't error
-                break;
-            }
-            j++;
+// Handle background Task(&)
+if (hasBackgroundTask) {
+    int j = 0;
+    while (args[j] != NULL) {
+        // Check if the background task symbol '&' exists in the arguments
+        if (strcmp(args[j], "&") == 0) {
+            args[j] = NULL; // Remove & from args so it doesn't cause exec errors
+            break;
         }
-
-        pid_t pid = fork();
-        if (pid == 0) {
-            // Child process: execute the command
-            if (execvp(args[0], args) == -1) {
-                perror("Error executing command");
-                exit(EXIT_FAILURE);
-            }
-        } else if (pid > 0) {
-            // Parent process: store background task information
-            backTasks[job_index].pid = pid;
-            strncpy(backTasks[job_index].command, args[0], sizeof(backTasks[job_index].command) - 1);
-            backTasks[job_index].command[sizeof(backTasks[job_index].command) - 1] = '\0'; // Null-terminate
-            strcpy(backTasks[job_index].status, "Running");
-            printf("Background Task Started: [%d] %d %s %s\n", job_index + 1, backTasks[job_index].pid, backTasks[job_index].status, backTasks[job_index].command);
-            job_index++;
-            return;
-        } else {
-            perror("Error forking process");
-        }
+        j++;
     }
+
+    pid_t pid = fork(); // Create a new process
+    if (pid == 0) {
+        // Child process: execute the command in the background
+        if (execvp(args[0], args) == -1) {
+            perror("Error executing background command");
+            exit(EXIT_FAILURE);
+        }
+    } else if (pid > 0) {
+        // Parent process: store background task information
+        backTasks[job_index].pid = pid;
+        strncpy(backTasks[job_index].command, args[0], sizeof(backTasks[job_index].command) - 1);
+        backTasks[job_index].command[sizeof(backTasks[job_index].command) - 1] = '\0'; // Null-terminate
+        strcpy(backTasks[job_index].status, "Running");
+
+        printf("Background Task Started: [%d] %d %s %s\n", job_index + 1, backTasks[job_index].pid, backTasks[job_index].status, backTasks[job_index].command);
+
+        job_index++;
+
+        // Non-blocking wait for background processes using waitpid with WNOHANG
+        //
+        //
+        /* signal(SIGCHLD, handle_child_termination); */
+        signal(SIGCHLD, handle_child_termination); // Ignore signal handling for background child termination to avoid zombies
+        return; // No need to block or wait for the background task
+    } else {
+        perror("Error forking background process");
+    }
+}
 
     // Handle input redirection (<)
 // Handle input redirection (<)
@@ -706,6 +744,13 @@ void readInput(){
     char *args[100];
 
     while (1) {
+
+        if (background_task_completed){
+            background_task_completed = 0;
+        }
+
+
+
         printf("[QUASH]$ ");
         // Read user input
         if (fgets(input, 1024, stdin) == NULL) {
