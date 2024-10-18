@@ -290,11 +290,68 @@ void parseThrough(char input[1024], char *args[100]){
     }
 
     // Handle input redirection (<)
-    if (hasInputRedirect) {
+// Handle input redirection (<)
+if (hasInputRedirect) {
+    int fd;
+    char *inputFile = NULL;
+    bool handled = false;
 
+    // Find the input file name
+    for (int j = 0; args[j] != NULL; j++) {
+        if (strcmp(args[j], "<") == 0) {
+            inputFile = args[j + 1]; // The file after '<' is the input file
+            args[j] = NULL; // Terminate the command before '<'
+            break;
+        }
     }
 
-    // Handle pipes (|)
+    if (inputFile) {
+        // Open the input file
+        fd = open(inputFile, O_RDONLY);
+        if (fd == -1) {
+            perror("Error opening input file");
+        } else {
+            pid_t pid = fork();
+            if (pid == -1) {
+                perror("fork");
+                close(fd);
+            } else if (pid == 0) {  // Child process
+                // Redirect stdin to the input file
+                if (dup2(fd, STDIN_FILENO) == -1) {
+                    perror("dup2");
+                    exit(EXIT_FAILURE);
+                }
+                close(fd);
+
+                // Execute the command
+                execvp(args[0], args);
+                perror("execvp");
+                exit(EXIT_FAILURE);
+            } else {  // Parent process
+                close(fd);
+                int status;
+                waitpid(pid, &status, 0);
+                handled = true;
+            }
+        }
+    }
+    
+    if (handled) {
+        // Skip the rest of command processing but continue the shell
+        return;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+// Handle pipes (|)
     // returne
     if (hasPipe) {
         // Find the position of the pipe
